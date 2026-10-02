@@ -6,6 +6,7 @@ import type {
   ThreatModelState,
   VersionSnapshot,
 } from './domain'
+import { buildBasisForThreat } from '@/services/reviewBasis'
 
 const evidence: ControlEvidence[] = [
   {
@@ -103,7 +104,7 @@ const mitigations: MitigationTask[] = [
   },
 ]
 
-const decisions: ReviewDecision[] = [
+const decisions: Omit<ReviewDecision, 'basis'>[] = [
   {
     id: 'dec-01',
     threatId: 'thr-01',
@@ -113,6 +114,8 @@ const decisions: ReviewDecision[] = [
     comment: '补充专线访问失败时的旁路告警证据。',
     createdAt: '2026-09-24T09:18:00+08:00',
     revision: 2,
+    signRound: 0,
+    state: 'active',
   },
   {
     id: 'dec-02',
@@ -123,6 +126,8 @@ const decisions: ReviewDecision[] = [
     comment: '密钥轮换已进入校验阶段。',
     createdAt: '2026-09-26T14:32:00+08:00',
     revision: 2,
+    signRound: 0,
+    state: 'active',
   },
   {
     id: 'dec-03',
@@ -133,24 +138,12 @@ const decisions: ReviewDecision[] = [
     comment: '首期接受按日抽检，月结窗口需双人审批。',
     createdAt: '2026-09-27T11:05:00+08:00',
     revision: 2,
+    signRound: 0,
+    state: 'active',
   },
 ]
 
 const baselineVersions: VersionSnapshot[] = [
-  {
-    id: 'ver-01',
-    revision: 1,
-    label: 'v1.0 初始基线',
-    createdAt: '2026-08-28T10:00:00+08:00',
-    author: '王岚',
-    notes: '完成系统边界、信任区与核心威胁基线。',
-    threatIds: ['thr-01', 'thr-02', 'thr-03'],
-    componentIds: ['cmp-01', 'cmp-02', 'cmp-03', 'cmp-04', 'cmp-05'],
-    flowIds: ['flow-01', 'flow-02', 'flow-03', 'flow-04'],
-    controlIds: ['ctl-01', 'ctl-02', 'ctl-03', 'ctl-04'],
-    riskIds: ['risk-01', 'risk-02', 'risk-03'],
-    affectedThreatIds: ['thr-01', 'thr-02', 'thr-03'],
-  },
   {
     id: 'ver-02',
     revision: 2,
@@ -164,6 +157,24 @@ const baselineVersions: VersionSnapshot[] = [
     controlIds: ['ctl-01', 'ctl-02', 'ctl-03', 'ctl-04'],
     riskIds: ['risk-01', 'risk-02', 'risk-03', 'risk-04'],
     affectedThreatIds: ['thr-01', 'thr-02'],
+    released: false,
+  },
+  {
+    id: 'ver-01',
+    revision: 1,
+    label: 'v1.0 初始基线',
+    createdAt: '2026-08-28T10:00:00+08:00',
+    author: '王岚',
+    notes: '完成系统边界、信任区与核心威胁基线。',
+    threatIds: ['thr-01', 'thr-02', 'thr-03'],
+    componentIds: ['cmp-01', 'cmp-02', 'cmp-03', 'cmp-04', 'cmp-05'],
+    flowIds: ['flow-01', 'flow-02', 'flow-03', 'flow-04'],
+    controlIds: ['ctl-01', 'ctl-02', 'ctl-03', 'ctl-04'],
+    riskIds: ['risk-01', 'risk-02', 'risk-03'],
+    affectedThreatIds: ['thr-01', 'thr-02', 'thr-03'],
+    released: true,
+    releasedAt: '2026-08-29T11:20:00+08:00',
+    releasedBy: '王岚',
   },
 ]
 
@@ -197,9 +208,11 @@ const audit: AuditEvent[] = [
   },
 ]
 
-export const createSeedState = (): ThreatModelState => ({
-  boundary: {
-    id: 'boundary-01',
+export const createSeedState = (): ThreatModelState => {
+  const state: ThreatModelState = {
+    schemaVersion: 2,
+    boundary: {
+      id: 'boundary-01',
     name: '客户运营与分析平台',
     description: '用于客户经营分析、营销编排与数据产品发布。',
     owner: '数字业务平台部',
@@ -409,6 +422,7 @@ export const createSeedState = (): ThreatModelState => ({
       riskIds: ['risk-01'],
       reviewStatus: 'in_review',
       revision: 2,
+      signRound: 0,
     },
     {
       id: 'thr-02',
@@ -426,6 +440,7 @@ export const createSeedState = (): ThreatModelState => ({
       riskIds: ['risk-02'],
       reviewStatus: 'approved',
       revision: 2,
+      signRound: 0,
     },
     {
       id: 'thr-03',
@@ -443,6 +458,7 @@ export const createSeedState = (): ThreatModelState => ({
       riskIds: ['risk-03'],
       reviewStatus: 'in_review',
       revision: 2,
+      signRound: 0,
     },
   ],
   attackPaths: [
@@ -516,4 +532,19 @@ export const createSeedState = (): ThreatModelState => ({
   versions: baselineVersions,
   audit,
   currentRevision: 2,
-})
+  }
+
+  // 历史会签记录按修订号回填审核依据：当前修订号可确认的记录重建依据快照
+  state.decisions.forEach((decision) => {
+    const threat = state.threats.find((item) => item.id === decision.threatId)
+    if (threat && threat.revision === decision.revision) {
+      decision.basis = buildBasisForThreat(state, threat)
+    } else {
+      decision.state = 'needs_review'
+      decision.invalidReason =
+        '历史会签意见未记录审核依据，且意见修订号与威胁当前修订号不一致，无法自动确认，请重新复核会签。'
+    }
+  })
+
+  return state
+}

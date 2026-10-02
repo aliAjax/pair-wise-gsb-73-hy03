@@ -4,6 +4,8 @@ export type ThreatStatus = 'open' | 'mitigating' | 'mitigated' | 'accepted'
 export type ControlStatus = 'effective' | 'degraded' | 'failed' | 'planned'
 export type ActorRole = 'development' | 'security' | 'business'
 export type DecisionType = 'accept' | 'degrade' | 'evidence_required' | 'approved' | 'rejected'
+export type DecisionState = 'active' | 'invalidated' | 'needs_review'
+export type BasisKind = 'threat' | 'control' | 'evidence' | 'mitigation'
 
 export interface SystemBoundary {
   id: string
@@ -112,6 +114,8 @@ export interface Threat {
   riskIds: string[]
   reviewStatus: ReviewStatus
   revision: number
+  /** 会签轮次：同修订号下依据失效后重新会签时递增 */
+  signRound: number
 }
 
 export interface MitigationTask {
@@ -127,6 +131,14 @@ export interface MitigationTask {
   conflictGroup?: string
 }
 
+export interface BasisEntry {
+  kind: BasisKind
+  refId: string
+  label: string
+  fingerprint: string
+  revision: number
+}
+
 export interface ReviewDecision {
   id: string
   threatId: string
@@ -136,6 +148,12 @@ export interface ReviewDecision {
   comment: string
   createdAt: string
   revision: number
+  signRound: number
+  /** 提交时记录的审核依据；升级前的历史数据可能缺失 */
+  basis?: BasisEntry[]
+  state: DecisionState
+  invalidatedAt?: string
+  invalidReason?: string
 }
 
 export interface VersionSnapshot {
@@ -151,6 +169,15 @@ export interface VersionSnapshot {
   controlIds: string[]
   riskIds: string[]
   affectedThreatIds: string[]
+  released: boolean
+  releasedAt?: string
+  releasedBy?: string
+}
+
+export interface ReleaseBlocker {
+  threatId: string
+  threatCode: string
+  reason: string
 }
 
 export interface AuditEvent {
@@ -164,6 +191,7 @@ export interface AuditEvent {
 }
 
 export interface ThreatModelState {
+  schemaVersion: number
   boundary: SystemBoundary
   zones: TrustZone[]
   components: ArchitectureComponent[]

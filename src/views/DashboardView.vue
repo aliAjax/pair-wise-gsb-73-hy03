@@ -9,6 +9,7 @@ import ProgressBar from 'primevue/progressbar'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { useDashboardGraphql } from '@/composables/useDashboardGraphql'
+import { latestRoundDecisions } from '@/services/reviewBasis'
 import { riskLevel, riskScore } from '@/services/selectors'
 import { useThreatModelStore } from '@/stores/threatModel'
 
@@ -103,7 +104,7 @@ const componentName = (id: string): string =>
               <strong>{{ threat.title }}</strong>
               <span>
                 v1.{{ threat.revision }} ·
-                {{ store.reviewProgress(store.data.decisions.filter((decision) => decision.threatId === threat.id && decision.revision === threat.revision)) }}%
+                {{ store.reviewProgress(latestRoundDecisions(store.data, threat.id, threat.revision).filter((d) => d.state === 'active')) }}%
                 会签进度
               </span>
             </div>

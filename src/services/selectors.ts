@@ -142,7 +142,7 @@ export const decisionsForThreat = (
   decisions.filter((decision) => decision.threatId === threatId && decision.revision === revision)
 
 export const reviewProgress = (decisions: ReviewDecision[]): number => {
-  const roles = new Set(decisions.map((decision) => decision.role))
+  const roles = new Set(decisions.filter((d) => d.state === 'active').map((decision) => decision.role))
   return Math.round((roles.size / 3) * 100)
 }
 

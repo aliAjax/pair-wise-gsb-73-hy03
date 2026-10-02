@@ -68,6 +68,7 @@ const threatForm = reactive<Threat>({
   riskIds: [],
   reviewStatus: 'draft',
   revision: store.data.currentRevision,
+  signRound: 0,
 })
 
 const filteredThreats = computed(() => {
@@ -140,6 +141,7 @@ const addThreat = (): void => {
     riskIds: [],
     reviewStatus: 'draft',
     revision: store.data.currentRevision,
+    signRound: 0,
   } satisfies Threat)
   editorVisible.value = true
 }
@@ -166,6 +168,7 @@ const saveThreat = (): void => {
     id: threatForm.id || createId('thr'),
     revision: threatForm.id ? store.data.currentRevision + 1 : store.data.currentRevision,
     reviewStatus: threatForm.id ? 'in_review' : threatForm.reviewStatus,
+    signRound: threatForm.id ? 0 : threatForm.signRound,
   }
   store.saveThreat(saved)
   selectedId.value = saved.id
