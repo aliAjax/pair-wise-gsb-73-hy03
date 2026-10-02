@@ -1,22 +1,34 @@
 import type { ThreatModelState } from '@/models/domain'
 import { createSeedState } from '@/models/seed'
+import { migrateState } from '@/services/reviewBasis'
 
 const STORAGE_KEY = 'scapex-threat-model-v1'
 
 const clone = <T>(value: T): T => structuredClone(value)
 
+const normalize = (state: ThreatModelState): ThreatModelState => {
+  // 升级历史数据：按修订号回填会签依据，并重新核对证据是否已静默失效
+  migrateState(state)
+  return state
+}
+
 export const loadState = (): ThreatModelState => {
   const raw = localStorage.getItem(STORAGE_KEY)
   if (!raw) {
-    const seed = createSeedState()
+    const seed = normalize(createSeedState())
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seed))
     return seed
   }
 
   try {
-    return JSON.parse(raw) as ThreatModelState
+    const parsed = JSON.parse(raw) as ThreatModelState
+    const changed = migrateState(parsed)
+    if (changed) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed))
+    }
+    return parsed
   } catch {
-    const seed = createSeedState()
+    const seed = normalize(createSeedState())
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seed))
     return seed
   }
@@ -27,7 +39,7 @@ export const saveState = (state: ThreatModelState): void => {
 }
 
 export const resetState = (): ThreatModelState => {
-  const seed = createSeedState()
+  const seed = normalize(createSeedState())
   saveState(seed)
   return seed
 }

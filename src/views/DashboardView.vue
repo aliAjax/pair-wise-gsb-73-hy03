@@ -103,7 +103,7 @@ const componentName = (id: string): string =>
               <strong>{{ threat.title }}</strong>
               <span>
                 v1.{{ threat.revision }} ·
-                {{ store.reviewProgress(store.data.decisions.filter((decision) => decision.threatId === threat.id && decision.revision === threat.revision)) }}%
+                {{ store.reviewProgress(store.activeDecisionsForThreat(store.data.decisions, threat.id, threat.revision)) }}%
                 会签进度
               </span>
             </div>

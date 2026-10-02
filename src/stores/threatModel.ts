@@ -11,10 +11,18 @@ import type {
 import { createId, loadState, resetState, saveState } from '@/services/repository'
 import {
   dashboardMetrics,
-  decisionsForThreat,
   getValidationIssues,
   reviewProgress,
 } from '@/services/selectors'
+import {
+  activeDecisionsForThreat,
+  affectedThreatsByChange,
+  assessVersionReadiness,
+  captureBasis,
+  invalidateDecisionsForThreats,
+  recomputeThreatReviewStatus,
+  type VersionReadiness,
+} from '@/services/reviewBasis'
 
 type CollectionKey =
   | 'zones'
@@ -69,6 +77,12 @@ export const useThreatModelStore = defineStore('threat-model', () => {
   const saveEntity = (collection: CollectionKey, item: IdentifiedEntity): void => {
     const target = data.value[collection] as unknown as IdentifiedEntity[]
     const index = target.findIndex((entry) => entry.id === item.id)
+    // 更新前先按旧关联计算一次影响面（例如证据被改挂到别的控制时，旧控制下的威胁也要复核）
+    const previous = index >= 0 ? target[index] : undefined
+    const previousImpacts = previous
+      ? affectedThreatsByChange(data.value, collection, previous).map((threat) => threat.id)
+      : []
+
     if (index >= 0) {
       target[index] = item
     } else {
@@ -76,6 +90,29 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     }
     const label = 'name' in item && typeof item.name === 'string' ? item.name : item.id
     appendAudit(collection, item.id, index >= 0 ? '更新' : '新增', `${label} 已保存`)
+
+    if (index >= 0) {
+      // 变更后重新核对受影响威胁的会签依据，失效的通过意见自动作废
+      const impactIds = new Set([
+        ...previousImpacts,
+        ...affectedThreatsByChange(data.value, collection, item).map((threat) => threat.id),
+      ])
+      const impacted = data.value.threats.filter((threat) => impactIds.has(threat.id))
+      if (impacted.length > 0) {
+        const resetThreatIds = invalidateDecisionsForThreats(data.value, impacted, {
+          markAudit: true,
+        })
+        resetThreatIds.forEach((threatId) => {
+          appendAudit(
+            'threat',
+            threatId,
+            '会签状态重算',
+            `${label} 的变化波及该威胁，相关会签意见已重新核对`,
+          )
+        })
+      }
+    }
+
     persist()
   }
 
@@ -83,8 +120,14 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     const target = data.value[collection] as unknown as IdentifiedEntity[]
     const index = target.findIndex((entry) => entry.id === id)
     if (index < 0) return
+    const removed = target[index]
     target.splice(index, 1)
     appendAudit(collection, id, '删除', '记录已从当前版本移除')
+
+    const impacted = affectedThreatsByChange(data.value, collection, removed)
+    if (impacted.length > 0) {
+      invalidateDecisionsForThreats(data.value, impacted, { markAudit: true })
+    }
     persist()
   }
 
@@ -136,6 +179,45 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     return snapshot
   }
 
+  /** 评估待发布版本：版本依据下三端一致通过、且无失效证据才放行 */
+  const assessLatestVersion = (): VersionReadiness | null => {
+    const latest = data.value.versions[0]
+    return latest ? assessVersionReadiness(data.value, latest) : null
+  }
+
+  /**
+   * 发布最新版本。任一受影响威胁未取得三端一致通过、存在驳回意见，
+   * 或控制证据已失效时，停止发布。
+   */
+  const publishLatestVersion = (): { ok: boolean; message: string } => {
+    const latest = data.value.versions[0]
+    if (!latest) return { ok: false, message: '尚无可发布的版本' }
+    if (latest.publishedAt) return { ok: false, message: `${latest.label} 已经发布` }
+    if (data.value.versions.some((version) => version !== latest && !version.publishedAt)) {
+      return { ok: false, message: '存在更早的未发布版本，请先处理历史版本' }
+    }
+
+    const readiness = assessVersionReadiness(data.value, latest)
+    if (!readiness.ready) {
+      return {
+        ok: false,
+        message: `仍有 ${readiness.blockers.length} 条受影响威胁未满足发布条件，发布已停止`,
+      }
+    }
+
+    const publishedAt = new Date().toISOString()
+    latest.publishedAt = publishedAt
+    latest.publishedBy = '当前用户'
+    appendAudit(
+      'version',
+      latest.id,
+      '发布版本',
+      `${latest.label} 三端会签一致通过、审核依据全部成立，已发布`,
+    )
+    persist()
+    return { ok: true, message: `${latest.label} 已发布` }
+  }
+
   const submitDecision = (
     threatId: string,
     role: ActorRole,
@@ -148,6 +230,9 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     data.value.decisions = data.value.decisions.filter(
       (item) => !(item.threatId === threatId && item.role === role && item.revision === threat.revision),
     )
+
+    // 提交时固化审核依据：威胁本体、控制证据与缓解任务
+    const basis = captureBasis(data.value, threat)
     data.value.decisions.unshift({
       id: createId('dec'),
       threatId,
@@ -157,23 +242,11 @@ export const useThreatModelStore = defineStore('threat-model', () => {
       comment,
       createdAt: new Date().toISOString(),
       revision: threat.revision,
+      basis,
+      basisStatus: 'confirmed',
     })
 
-    const currentDecisions = decisionsForThreat(data.value.decisions, threatId, threat.revision)
-    const requiredRoles: ActorRole[] = ['development', 'security', 'business']
-    const allSubmitted = requiredRoles.every((requiredRole) =>
-      currentDecisions.some((item) => item.role === requiredRole),
-    )
-    if (currentDecisions.some((item) => item.decision === 'rejected')) {
-      threat.reviewStatus = 'rejected'
-    } else if (
-      allSubmitted &&
-      currentDecisions.every((item) => item.decision === 'approved')
-    ) {
-      threat.reviewStatus = 'approved'
-    } else {
-      threat.reviewStatus = 'in_review'
-    }
+    threat.reviewStatus = recomputeThreatReviewStatus(data.value, threat)
 
     const decisionLabel: Record<DecisionType, string> = {
       accept: '接受',
@@ -186,7 +259,7 @@ export const useThreatModelStore = defineStore('threat-model', () => {
       'threat',
       threatId,
       decisionLabel[decision],
-      `${actor}（${role}）提交会签意见`,
+      `${actor}（${role}）提交会签意见，已记录 ${basis.items.length + 1} 项审核依据`,
     )
     persist()
   }
@@ -199,6 +272,9 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     if (!task) return
     task.status = status
     appendAudit('mitigation', task.id, '更新状态', `${task.title} 更新为 ${status}`)
+    // 缓解任务状态变化后，关联威胁上依据该任务的通过意见失效
+    const impacted = data.value.threats.filter((threat) => threat.id === task.threatId)
+    invalidateDecisionsForThreats(data.value, impacted, { markAudit: true })
     persist()
   }
 
@@ -259,10 +335,17 @@ export const useThreatModelStore = defineStore('threat-model', () => {
       ...issues.value.map((issue) => `- [${issue.severity}] ${issue.title}：${issue.detail}`),
       '',
       '## 会签记录',
-      ...data.value.decisions.map(
-        (decision) =>
-          `- ${decision.createdAt} ${decision.actor}（${decision.role}）${decision.decision}：${decision.comment}`,
-      ),
+      ...data.value.decisions.map((decision) => {
+        const basisNote =
+          decision.basisStatus === 'invalidated'
+            ? `｜依据失效：${decision.invalidReason ?? ''}`
+            : decision.basisStatus === 'unverified'
+              ? `｜依据待复核：${decision.invalidReason ?? ''}`
+              : decision.basis
+                ? `｜依据成立（${decision.basis.items.length} 项关联证据/任务）`
+                : '｜无审核依据'
+        return `- ${decision.createdAt} ${decision.actor}（${decision.role}）${decision.decision}（r${decision.revision}）${basisNote}：${decision.comment}`
+      }),
     ]
     return lines.join('\n')
   }
@@ -280,6 +363,9 @@ export const useThreatModelStore = defineStore('threat-model', () => {
     createVersion,
     submitDecision,
     updateMitigationStatus,
+    assessLatestVersion,
+    publishLatestVersion,
+    activeDecisionsForThreat,
     acceptRisk,
     closeRisk,
     resetDemo,

@@ -4,6 +4,8 @@ export type ThreatStatus = 'open' | 'mitigating' | 'mitigated' | 'accepted'
 export type ControlStatus = 'effective' | 'degraded' | 'failed' | 'planned'
 export type ActorRole = 'development' | 'security' | 'business'
 export type DecisionType = 'accept' | 'degrade' | 'evidence_required' | 'approved' | 'rejected'
+export type BasisStatus = 'confirmed' | 'invalidated' | 'unverified'
+export type BasisItemType = 'threat' | 'evidence' | 'mitigation'
 
 export interface SystemBoundary {
   id: string
@@ -127,6 +129,26 @@ export interface MitigationTask {
   conflictGroup?: string
 }
 
+export interface ReviewBasisItem {
+  type: BasisItemType
+  id: string
+  label: string
+  fingerprint: string
+  /** 证据类依据在记录时是否有效（未失效且未过期） */
+  effective?: boolean
+}
+
+export interface ReviewBasis {
+  /** 依据快照创建时所在的威胁修订号 */
+  threatRevision: number
+  /** 威胁本体指纹 */
+  threatFingerprint: string
+  items: ReviewBasisItem[]
+  capturedAt: string
+  /** 历史回填的依据标记为重建，需要人工确认其可靠性 */
+  reconstructed?: boolean
+}
+
 export interface ReviewDecision {
   id: string
   threatId: string
@@ -136,6 +158,11 @@ export interface ReviewDecision {
   comment: string
   createdAt: string
   revision: number
+  /** 提交时记录的审核依据（威胁、控制证据、缓解任务快照） */
+  basis?: ReviewBasis
+  basisStatus?: BasisStatus
+  invalidReason?: string
+  invalidatedAt?: string
 }
 
 export interface VersionSnapshot {
@@ -151,6 +178,8 @@ export interface VersionSnapshot {
   controlIds: string[]
   riskIds: string[]
   affectedThreatIds: string[]
+  publishedAt?: string
+  publishedBy?: string
 }
 
 export interface AuditEvent {
@@ -179,6 +208,8 @@ export interface ThreatModelState {
   versions: VersionSnapshot[]
   audit: AuditEvent[]
   currentRevision: number
+  /** 本地数据结构版本，用于升级时回填会签依据 */
+  schemaVersion?: number
 }
 
 export interface ValidationIssue {

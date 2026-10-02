@@ -28,10 +28,15 @@ const report = computed(() => {
     '',
     '## 会签意见',
     ...(includeDecisions.value
-      ? store.data.decisions.map(
-          (decision) =>
-            `- ${decision.actor}/${decision.role}/${decision.decision}：${decision.comment}`,
-        )
+      ? store.data.decisions.map((decision) => {
+        const basisNote =
+          decision.basisStatus === 'invalidated'
+            ? `（依据失效：${decision.invalidReason}）`
+            : decision.basisStatus === 'unverified'
+              ? '（依据待复核）'
+              : '（依据成立）'
+        return `- ${decision.actor}/${decision.role}/${decision.decision}/r${decision.revision}${basisNote}：${decision.comment}`
+      })
       : ['- 未包含']),
     '',
     '## 审计轨迹',
